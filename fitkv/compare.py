@@ -9,6 +9,7 @@ import math
 
 import torch
 
+from .config import get
 from .baselines import (
     adakv_scores,
     h2o_scores,
@@ -28,11 +29,23 @@ def _keep_tokens(idx, block, n, n_ctx, device):
                      + [torch.arange(n_ctx, n)]).to(device)
 
 
-def apply_method(method, keys, values, queries, minimum, block=16, window=64):
-    """Compress keys and values (lists over layers of [H, n, d]) in place with `method`.
+def apply_method(method, keys, values, queries, minimum, block=None, window=None):
+    """Compress a prompt's cache in place with one method and report the budget used.
 
-    Returns the per input budget used (int) for every method.
+    Args:
+        method (str): one of the names in METHODS.
+        keys (list[Tensor [H, n, d]]): cached keys per layer.
+        values (list[Tensor [H, n, d]]): cached values per layer.
+        queries (list[Tensor [H, n, d]]): post rotary queries per layer.
+        minimum (int): budget floor B in tokens per layer.
+        block (int or None): tokens per block; default from config.
+        window (int or None): observation window; default from config.
+
+    Returns:
+        int: the budget used (the full length for 'full'); keys and values are replaced in place.
     """
+    block = get("fitkv", "block_size") if block is None else block
+    window = get("fitkv", "window") if window is None else window
     if method not in METHODS:
         raise ValueError(f"unknown method {method!r}; choose from {METHODS}")
     L = len(keys)
@@ -68,11 +81,11 @@ def apply_method(method, keys, values, queries, minimum, block=16, window=64):
             lam_l = 1.0
             a_bar = A_heads.mean(dim=1)
             v_blocks = v[:, :n_ctx, :].float().reshape(v.shape[0], -1, block, v.shape[-1]).mean(dim=2)
-            out = (a_bar.unsqueeze(-1) * v_blocks).sum(dim=1) / (a_bar.sum(dim=1, keepdim=True) + 1e-8)
+            out = (a_bar.unsqueeze(-1) * v_blocks).sum(dim=1) / (a_bar.sum(dim=1, keepdim=True) + get("numerics", "eps"))
             dist = (v_blocks - out.unsqueeze(1)).norm(dim=-1) / math.sqrt(v.shape[-1])
             g = (a_bar * dist).mean(dim=0)
             g_t = g * ((mu + lam_l * sigma).max() / (g.max() + 1e-12))
-            scores = layer_scores(A, g_t, lam_l, 0.3)
+            scores = layer_scores(A, g_t, lam_l, get("fitkv", "value_weight"))
         idx = select_blocks(scores, layer_keep, always_keep=2)
         tokens = _keep_tokens(idx, block, n, n_ctx, k.device)
         keys[l] = k[:, tokens, :]

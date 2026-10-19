@@ -1,0 +1,21 @@
+# Hyperparameters for FitKV and the baselines.
+# Every value used by the code is read from this file through fitkv/config.py.
+
+fitkv:
+  block_size: 16          # P: tokens per block
+  window: 64              # w: observation window, in prompt queries
+  value_weight: 0.3       # eta: weight of the value term in the block score
+  always_keep_blocks: 2   # last blocks kept in every layer, besides the window
+  lambda_scale: 2.0       # divisor in lambda = min(1, mean D / lambda_scale); set by hand
+  late_layer_fraction: 0.6667  # late layers are the last third of the layers (2/3 of depth)
+
+numerics:
+  eps: 1.0e-8             # EPS: added to denominators to avoid division by zero
+  smooth_width: 5         # SMOOTH_WIDTH: moving average width along the token axis
+
+baselines:
+  h2o_sink_tokens: 4      # n_sink: initial tokens H2O always keeps
+  h2o_chunk: 512          # query rows processed per chunk when accumulating attention
+  pyramidkv_window_blocks: 4   # window kept per layer by PyramidKV
+  pyramidkv_beta: 20      # smallest layer budget is the average divided by beta
+  adakv_floor_alpha: 0.20 # per head guaranteed share in Ada-KV

@@ -17,11 +17,22 @@ import math
 import torch
 import torch.nn.functional as F
 
-SMOOTH_WIDTH = 5
+from .config import get
+
+SMOOTH_WIDTH = get("numerics", "smooth_width")
 
 
-def select_blocks(scores: torch.Tensor, keep: int, always_keep: int = 2) -> torch.Tensor:
-    """Top `keep` blocks by score, with the last `always_keep` blocks forced in."""
+def select_blocks(scores: torch.Tensor, keep: int, always_keep: int = get("fitkv", "always_keep_blocks")) -> torch.Tensor:
+    """Indices of the top scoring blocks, always including the last blocks.
+
+    Args:
+        scores (Tensor [m]): block scores.
+        keep (int): number of blocks to keep.
+        always_keep (int): number of final blocks forced into the selection.
+
+    Returns:
+        Tensor [keep] of int64: sorted block indices.
+    """
     m = scores.shape[0]
     if keep >= m:
         return torch.arange(m)
@@ -31,13 +42,30 @@ def select_blocks(scores: torch.Tensor, keep: int, always_keep: int = 2) -> torc
 
 
 def _block_mean(x: torch.Tensor, block: int) -> torch.Tensor:
-    """Sum attention per block along the last dimension (x: [..., n_ctx])."""
+    """Sum attention within consecutive blocks along the last dimension.
+
+    Args:
+        x (Tensor [..., n_ctx]): attention over context tokens.
+        block (int): tokens per block.
+
+    Returns:
+        Tensor [..., m]: per block sums, with m = n_ctx / block.
+    """
     *lead, n = x.shape
     return x.reshape(*lead, n // block, block).sum(dim=-1)
 
 
 def quest_scores(q_last: torch.Tensor, keys: torch.Tensor, block: int) -> torch.Tensor:
-    """q_last: [H, d] last query; keys: [H, n, d]. Returns [m] block scores."""
+    """Quest block scores: upper bound of query and key dot products per block.
+
+    Args:
+        q_last (Tensor [H, d]): last query of each head.
+        keys (Tensor [H, n, d]): cached keys.
+        block (int): tokens per block.
+
+    Returns:
+        Tensor [m]: one upper bound score per block, summed over heads.
+    """
     H, n, d = keys.shape
     m = n // block
     kb = keys[:, : m * block, :].reshape(H, m, block, d)
@@ -47,8 +75,18 @@ def quest_scores(q_last: torch.Tensor, keys: torch.Tensor, block: int) -> torch.
     return upper.sum(dim=0)
 
 
-def snapkv_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, window: int = 64) -> torch.Tensor:
-    """queries, keys: [H, n, d]. Returns [m] block scores (head averaged)."""
+def snapkv_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, window: int = get("fitkv", "window")) -> torch.Tensor:
+    """SnapKV block scores from the attention of the final window, pooled over the window.
+
+    Args:
+        queries (Tensor [H, n, d]): post rotary queries.
+        keys (Tensor [H, n, d]): cached keys.
+        block (int): tokens per block.
+        window (int): observation window w.
+
+    Returns:
+        Tensor [m]: one score per block, averaged over heads.
+    """
     H, n, d = keys.shape
     window = min(window, n - 1)
     n_ctx = ((n - window) // block) * block
@@ -59,8 +97,19 @@ def snapkv_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, window:
     return _block_mean(attn, block).mean(dim=0)                     # [m]
 
 
-def h2o_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, n_sink: int = 4, chunk: int = 512) -> torch.Tensor:
-    """Accumulated causal attention from all prompt queries. Returns [m] block scores."""
+def h2o_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, n_sink: int = get("baselines", "h2o_sink_tokens"), chunk: int = get("baselines", "h2o_chunk")) -> torch.Tensor:
+    """H2O block scores from attention accumulated over all prompt queries.
+
+    Args:
+        queries (Tensor [H, n, d]): post rotary queries.
+        keys (Tensor [H, n, d]): cached keys.
+        block (int): tokens per block.
+        n_sink (int): initial tokens always kept.
+        chunk (int): query rows per chunk.
+
+    Returns:
+        Tensor [m]: accumulated attention per block; sink blocks receive the maximum score.
+    """
     H, n, d = keys.shape
     m = n // block
     usable = m * block
@@ -80,8 +129,20 @@ def h2o_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, n_sink: in
 
 
 def pyramidkv_layer_budget(layer: int, num_layers: int, budget: int, block: int,
-                           window_blocks: int = 4, beta: int = 20) -> int:
-    """Per layer budget from PyramidKV's linear schedule (layer 0 largest)."""
+                           window_blocks: int = get("baselines", "pyramidkv_window_blocks"), beta: int = get("baselines", "pyramidkv_beta")) -> int:
+    """Per layer token budget from PyramidKV's linear schedule (layer 0 largest).
+
+    Args:
+        layer (int): 0-based layer index.
+        num_layers (int): total layers L.
+        budget (int): average budget B per layer.
+        block (int): tokens per block.
+        window_blocks (int): blocks kept as window.
+        beta (int): smallest budget is the average divided by beta.
+
+    Returns:
+        int: the token budget of this layer, including the window.
+    """
     window = window_blocks * block
     base = budget - window
     min_b = max(block, base // beta)
@@ -92,13 +153,19 @@ def pyramidkv_layer_budget(layer: int, num_layers: int, budget: int, block: int,
     return max(min_b, round(max_b - layer * steps)) + window
 
 
-def adakv_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, window: int = 64,
-                 floor_alpha: float = 0.20) -> torch.Tensor:
-    """Block level Ada-KV. queries, keys: [H, n, d]. Returns [m] block scores.
+def adakv_scores(queries: torch.Tensor, keys: torch.Tensor, block: int, window: int = get("fitkv", "window"),
+                 floor_alpha: float = get("baselines", "adakv_floor_alpha")) -> torch.Tensor:
+    """Ada-KV block scores with per head floors and a global competition across heads.
 
-    Each head keeps its own SnapKV block scores. A block is kept if any head
-    ranks it in its per head floor (the top `floor_alpha` share of blocks),
-    or if it ranks highly in the global ordering across heads.
+    Args:
+        queries (Tensor [H, n, d]): post rotary queries.
+        keys (Tensor [H, n, d]): cached keys.
+        block (int): tokens per block.
+        window (int): observation window w.
+        floor_alpha (float): share of blocks each head keeps.
+
+    Returns:
+        Tensor [m]: one score per block, taken as the maximum over heads.
     """
     H, n, d = keys.shape
     window = min(window, n - 1)
