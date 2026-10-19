@@ -123,11 +123,11 @@ FitKV improves on the best fixed budget method by 6.8 points on Qwen2.5-3B at `B
 and by 4.3 points on Qwen2.5-7B at `B=128`. Its advantage is largest at small budgets and
 closes at `B=2048`. On Llama-3.1-8B and the other budgets, see the paper.
 
-![Retained accuracy](figures/results_retained.pdf)
+![Retained accuracy](figures/results_retained.png)
 
 *Figure: Share of full cache accuracy each method retains, Grid A (six question answering tasks).*
 
-![Per example outcomes](figures/results_outcomes.pdf)
+![Per example outcomes](figures/results_outcomes.png)
 
 *Figure: Effect of eviction on individual examples relative to the full cache. FitKV lowers the score of about 6% of examples at `B=128`; fixed budget methods lower 30 to 41%.*
 

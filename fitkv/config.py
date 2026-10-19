@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "fitkv.yaml"
+DEFAULT_CONFIG = Path(__file__).resolve().parent / "configs" / "fitkv.yaml"
 
 
 @lru_cache(maxsize=None)
