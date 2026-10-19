@@ -26,6 +26,38 @@ where `n` is the prompt length and `B` is the minimum budget. Every layer then k
 The block score is `mu + lambda_l * sigma + eta * g`, where `g` is a value term that
 measures how far a block's mean value lies from the window's attention output.
 
+## Baselines
+
+The repository includes the baselines compared with FitKV in the paper. They share the
+same block size, observation window, always kept blocks and budget floor, so the
+differences come from the selection rule only.
+
+| Method | Name in `apply_method` | Selection rule |
+|--------|------------------------|----------------|
+| Full cache | `full` | Keeps every token |
+| FitKV | `fitkv` | Adaptive budget and block selection (this method) |
+| FitKV, fixed budget | `fitkv_fixed` | FitKV block selection with `lambda = 1` |
+| SnapKV | `snapkv` | Attention of the final window, pooled over the window |
+| H2O | `h2o` | Attention accumulated over all prompt queries; sink blocks kept |
+| Quest | `quest` | Upper bound of query and key dot products per block |
+| PyramidKV | `pyramidkv` | SnapKV scores with a linear budget schedule across layers |
+| Ada-KV | `adakv` | Per head SnapKV scores with global competition and a per head floor |
+
+```python
+from fitkv.compare import apply_method
+budget = apply_method("snapkv", keys, values, queries, minimum=128)
+```
+
+Notes on the baselines:
+
+- **Quest** is applied once after the prompt, with its bound computed from the last query.
+  The original Quest design selects pages at every decoding step, so these numbers measure
+  Quest as a one shot eviction method.
+- **PyramidKV** uses a per layer budget that decreases with depth and averages to the
+  minimum `B`. Its per layer cache therefore differs from the other methods, while the mean is the same.
+- **Ada-KV** is a block level adaptation of AdaKV. The original method works on tokens within
+  each head, so this version is an approximation at block granularity.
+
 ## Install
 
 ```bash
@@ -56,6 +88,9 @@ python examples/compress_prompt.py --model Qwen/Qwen2.5-0.5B-Instruct --budget 1
 python -m pytest tests/
 ```
 
+The tests check the budget formula, the routing scalar, the selection rule, that the
+observation window is always kept, and that every baseline runs and keeps the expected blocks.
+
 ## Parameters
 
 | Name | Default | Meaning |
@@ -69,8 +104,9 @@ The scale of `1/2` in `lambda` was fixed by hand and not tuned.
 
 ## Scope
 
-This repository contains the method. It does not include the benchmark harness used
-for the paper's experiments (LongBench runs, baselines and result aggregation).
+This repository contains the method and the baselines. It does not include the benchmark
+harness used for the paper's experiments (dataset loading for LongBench, batch scheduling
+and result aggregation).
 
 ## Citation
 
