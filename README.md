@@ -4,7 +4,7 @@ Official code for the paper *"FitKV: Fitting the KV Cache Budget to Each Input f
 
 📄 **Paper:** [paper.pdf](paper.pdf)
 
-![FitKV overview](figures/pipeline.png)
+![FitKV overview](figures/fitkv_overview.png)
 
 *Figure: (a) after the prompt pass, the queries and KV cache of every layer are available, and the last third of the layers forms the late layer set; (b) the window queries attend to the context blocks; (c) each block gets a mean and a standard deviation of attention over the queries, and their ratio measures how much the queries disagree; (d) the late layer average gives the routing scalar λ; (e) λ places the input's budget between the minimum B and the full length n; (f) every layer keeps its top blocks together with the window.*
 
