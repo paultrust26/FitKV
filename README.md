@@ -31,9 +31,18 @@ When the queries agree, the budget stays near the full length; when they disagre
 
 ## Installation
 
+Python 3.12 or newer is required (tested with 3.12 and 3.13). The default `python3` on many systems is older (macOS ships 3.9), so create the environment with an explicit 3.12 interpreter:
+
 ```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python --version            # should print Python 3.12 or newer
 pip install -r requirements.txt
 ```
+
+If `python3.12` is not found, install it first, for example with `brew install python@3.12` (macOS), `sudo apt install python3.12 python3.12-venv` (Ubuntu) or from [python.org](https://www.python.org/downloads/).
+
+`requirements.txt` pins every package in the tested environment, including indirect dependencies. The package itself only needs `torch` and `pyyaml`. `transformers` is used by the Hugging Face example, and `pytest` by the tests.
 
 Running the tests (from the repository root):
 
@@ -45,21 +54,35 @@ python -m pytest tests/
 
 ### Using FitKV directly
 
+FitKV takes one `[H, n, d]` tensor per layer for the keys, values and post rotary queries (one row per key value head), taken after the prompt pass. The snippet below uses random tensors so it runs as is from the repository root; with a real model, pass its cache and queries instead (see the Hugging Face example below).
+
 ```python
+import torch
 from fitkv import compress_kv_cache
 
-# keys, values, queries: one [H, n, d] tensor per layer, taken after the prompt pass
-# (queries are the post rotary queries, one row per key value head)
+layers, heads, n, d = 12, 2, 2048, 64
+keys = [torch.randn(heads, n, d) for _ in range(layers)]
+values = [torch.randn(heads, n, d) for _ in range(layers)]
+queries = [torch.randn(heads, n, d) for _ in range(layers)]
+
 budget, lam, kept = compress_kv_cache(keys, values, queries, minimum=128)
 # keys and values are replaced in place; budget is B_x and lam is the routing scalar
+print(budget, round(lam, 3), keys[0].shape)
 ```
 
 ### Comparing with the baselines
 
 ```python
+import torch
 from fitkv.compare import apply_method
 
+layers, heads, n, d = 12, 2, 2048, 64
+keys = [torch.randn(heads, n, d) for _ in range(layers)]
+values = [torch.randn(heads, n, d) for _ in range(layers)]
+queries = [torch.randn(heads, n, d) for _ in range(layers)]
+
 budget = apply_method("snapkv", keys, values, queries, minimum=128)
+print(budget, keys[0].shape)
 ```
 
 ### Running on a Hugging Face model
@@ -67,6 +90,8 @@ budget = apply_method("snapkv", keys, values, queries, minimum=128)
 ```bash
 python examples/compress_prompt.py --model Qwen/Qwen2.5-0.5B-Instruct --budget 128
 ```
+
+The first run downloads the model from the Hugging Face Hub (about 1 GB for Qwen2.5-0.5B). The script runs the prompt once, captures the post rotary queries of every layer, averages the query heads within each key value group (as in the paper), and compresses the cache with FitKV. It prints the prompt length, the routing scalar λ and the chosen budget.
 
 > **Scope:** this repository contains FitKV and the baselines. The benchmark harness used for the paper's runs (LongBench loading, job scheduling and result aggregation) is not included.
 

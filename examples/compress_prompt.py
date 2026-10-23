@@ -6,15 +6,23 @@ Requires: torch and a Hugging Face causal LM. Run from the repository root:
 """
 
 import argparse
+import sys
+from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from fitkv import compress_kv_cache
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from fitkv import compress_kv_cache  # noqa: E402
 
 
 def capture_queries(model):
-    """Record post rotary queries of every layer during the prompt pass."""
+    """Record post rotary queries of every layer during the prompt pass.
+
+    Query heads are averaged within each key value group (grouped query attention),
+    as in the paper, so each layer gives one [kv_heads, n, d] tensor that matches its keys.
+    """
     store = {}
     handles = []
     for i, layer in enumerate(model.model.layers):
@@ -29,7 +37,9 @@ def capture_queries(model):
             cos, sin = pos_cos.unsqueeze(1), pos_sin.unsqueeze(1)
             half = d // 2
             rot = torch.cat((-q[..., half:], q[..., :half]), dim=-1)
-            store[i] = (q * cos + rot * sin)[0].detach()
+            q = (q * cos + rot * sin)[0]
+            kv = model.config.num_key_value_heads
+            store[i] = q.view(kv, H // kv, -1, d).mean(dim=1).detach()
         handles.append(attn.register_forward_hook(hook, with_kwargs=True))
     return store, handles
 
@@ -42,7 +52,7 @@ def main():
     args = p.parse_args()
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float16).eval()
+    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.float16).eval()
     ids = tok(args.text, return_tensors="pt").input_ids
     queries, handles = capture_queries(model)
     with torch.no_grad():
