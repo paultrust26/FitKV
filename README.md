@@ -42,7 +42,7 @@ pip install -r requirements.txt
 
 If `python3.12` is not found, install it first, for example with `brew install python@3.12` (macOS), `sudo apt install python3.12 python3.12-venv` (Ubuntu) or from [python.org](https://www.python.org/downloads/).
 
-`requirements.txt` pins every package in the tested environment, including indirect dependencies. The package itself only needs `torch` and `pyyaml`. `transformers` is used by the Hugging Face example, and `pytest` by the tests.
+The package itself only needs `torch` and `pyyaml`. `transformers` is used by the Hugging Face example, and `pytest` by the tests.
 
 Running the tests (from the repository root):
 
@@ -92,8 +92,6 @@ python examples/compress_prompt.py --model Qwen/Qwen2.5-0.5B-Instruct --budget 1
 ```
 
 The first run downloads the model from the Hugging Face Hub (about 1 GB for Qwen2.5-0.5B). The script runs the prompt once, captures the post rotary queries of every layer, averages the query heads within each key value group (as in the paper), and compresses the cache with FitKV. It prints the prompt length, the routing scalar λ and the chosen budget.
-
-> **Scope:** this repository contains FitKV and the baselines. The benchmark harness used for the paper's runs (LongBench loading, job scheduling and result aggregation) is not included.
 
 ## Methods Compared
 
